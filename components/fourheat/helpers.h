@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "common.h"
+#include "esphome/core/alloc_helpers.h"
 
 namespace esphome {
 namespace fourheat {
