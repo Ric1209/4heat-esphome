@@ -21,24 +21,39 @@ CONF_ON_DATAPOINT = "on_datapoint"
 CONF_OFF_DATAPOINT = "off_datapoint"
 CONF_ON_DATA = "on_data"
 CONF_OFF_DATA = "off_data"
+CONF_LEGACY_POWER_CONTROL = "legacy_power_control"
 
-CONFIG_SCHEMA = (
-    switch.switch_schema(FourHeatSwitch)
-    .extend(
-        {
-            cv.GenerateID(CONF_FOURHEAT_ID): cv.use_id(FourHeat),
-            cv.Required(CONF_DATAPOINT): fhcv.datapoint,
-            cv.Optional(CONF_QUERY_DATAPOINT): fhcv.datapoint,
 
-            cv.Optional(CONF_PARSER): cv.returning_lambda,
+def validate_legacy_power(config):
+    if config[CONF_LEGACY_POWER_CONTROL] and (
+        config[CONF_DATAPOINT] != "J30001"
+        or config.get(CONF_QUERY_DATAPOINT, "I30001") != "I30001"
+    ):
+        raise cv.Invalid("legacy_power_control requires datapoint J30001 and query I30001")
+    return config
 
-            cv.Optional(CONF_ON_DATAPOINT): fhcv.datapoint,
-            cv.Optional(CONF_OFF_DATAPOINT): fhcv.datapoint,
-            cv.Optional(CONF_ON_DATA): fhcv.data,
-            cv.Optional(CONF_OFF_DATA): fhcv.data,
-        }
-    )
-    .extend(cv.COMPONENT_SCHEMA)
+
+CONFIG_SCHEMA = cv.All(
+    (
+        switch.switch_schema(FourHeatSwitch)
+        .extend(
+            {
+                cv.GenerateID(CONF_FOURHEAT_ID): cv.use_id(FourHeat),
+                cv.Required(CONF_DATAPOINT): fhcv.datapoint,
+                cv.Optional(CONF_QUERY_DATAPOINT): fhcv.datapoint,
+
+                cv.Optional(CONF_PARSER): cv.returning_lambda,
+
+                cv.Optional(CONF_ON_DATAPOINT): fhcv.datapoint,
+                cv.Optional(CONF_OFF_DATAPOINT): fhcv.datapoint,
+                cv.Optional(CONF_ON_DATA): fhcv.data,
+                cv.Optional(CONF_OFF_DATA): fhcv.data,
+                cv.Optional(CONF_LEGACY_POWER_CONTROL, default=False): cv.boolean,
+            }
+        )
+        .extend(cv.COMPONENT_SCHEMA)
+    ),
+    validate_legacy_power,
 )
 
 
@@ -48,6 +63,8 @@ async def to_code(config):
 
     parent = await cg.get_variable(config[CONF_FOURHEAT_ID])
     cg.add(var.set_fourheat_parent(parent))
+    if config[CONF_LEGACY_POWER_CONTROL]:
+        cg.add(var.enable_legacy_power_control())
 
     cg.add(var.set_datapoint_id(config[CONF_DATAPOINT]))
 

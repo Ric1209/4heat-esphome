@@ -8,6 +8,10 @@ namespace fourheat {
 static const char *const TAG = "fourheat.switch";
 
 void FourHeatSwitch::setup() {
+  if (this->legacy_power_control_) {
+    this->parent_->enable_legacy_power_control();
+  }
+
   auto query_id = get_query_datapoint_id(this->datapoint_id_, this->query_datapoint_id_);
 
   this->parent_->register_query(query_id);
@@ -40,6 +44,11 @@ void FourHeatSwitch::set_off_data(std::string data) { this->off_data_ = std::mov
 void FourHeatSwitch::write_state(bool state) {
   ESP_LOGV(TAG, "Setting switch %s: %s", this->datapoint_id_.c_str(), ONOFF(state));
 
+  if (this->legacy_power_control_) {
+    this->parent_->request_legacy_power(state);
+    return;
+  }
+
   std::string id;
 
   if (state) {
@@ -58,6 +67,14 @@ void FourHeatSwitch::write_state(bool state) {
 }
 
 void FourHeatSwitch::handle_data_(const std::vector<uint8_t> &data) {
+  if (this->legacy_power_control_) {
+    auto state = classify_legacy_power_state(data.begin(), data.end());
+    if (state == LegacyPowerStatus::RUNNING || state == LegacyPowerStatus::OFF) {
+      this->publish_state(state == LegacyPowerStatus::RUNNING);
+    }
+    return;
+  }
+
   auto parsed = parse<bool>(this->parser_, data);
 
   if (!parsed.has_value()) {

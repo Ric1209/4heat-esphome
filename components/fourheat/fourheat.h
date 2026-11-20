@@ -1,6 +1,8 @@
 #pragma once
 
+#include <functional>
 #include <queue>
+#include <string>
 #include <vector>
 
 #include "esphome/core/component.h"
@@ -14,6 +16,11 @@
 
 namespace esphome {
 namespace fourheat {
+
+enum class LegacyPowerStatus { UNKNOWN, OFF, STARTING, RUNNING, STOPPING, ALARM, STANDBY };
+
+LegacyPowerStatus classify_legacy_power_state(std::vector<uint8_t>::const_iterator begin,
+                                              std::vector<uint8_t>::const_iterator end);
 
 struct FourHeatDataListener {
   std::string id;
@@ -40,6 +47,9 @@ class FourHeat : public PollingComponent, public uart::UARTDevice {
 
   void register_query(const std::string &id);
   void register_listener(const std::string &id, const std::function<void(const std::vector<uint8_t>)> &func);
+
+  void enable_legacy_power_control() { this->legacy_power_enabled_ = true; }
+  void request_legacy_power(bool on);
 
   void send_raw_value(const std::vector<uint8_t> &value);
   void send_bytes_value(const std::string &id, const std::vector<uint8_t> &value);
@@ -71,6 +81,26 @@ class FourHeat : public PollingComponent, public uart::UARTDevice {
   std::vector<std::vector<uint8_t>> queries_;
   std::queue<std::vector<uint8_t>> tx_queue_;
   std::vector<FourHeatDataListener> listeners_;
+
+  enum class LegacyPhase { IDLE, QUEUED, WAIT_READ_SMS, SEND_SMS, DRAIN, VERIFY_PENDING, VERIFY_REPLY };
+  LegacyPhase legacy_phase_{LegacyPhase::IDLE};
+  bool legacy_power_enabled_{false};
+  bool legacy_target_on_{false};
+  bool legacy_sms_delivered_{false};
+  bool legacy_stop_pending_{false};
+  uint32_t legacy_phase_started_{0};
+  uint32_t legacy_verification_started_{0};
+  uint32_t legacy_last_read_{0};
+  std::string legacy_line_;
+  bool legacy_line_invalid_{false};
+  bool legacy_line_padded_{false};
+  LegacyPowerStatus legacy_last_status_{LegacyPowerStatus::UNKNOWN};
+
+  bool process_legacy_power_(uint32_t now);
+  bool start_legacy_exchange_if_due_(uint32_t now);
+  void handle_legacy_modem_byte_(uint8_t c);
+  void handle_legacy_state_(uint32_t now);
+  void write_legacy_bytes_(const std::string &data);
 
   void handle_char_(uint8_t c);
   void handle_message_();

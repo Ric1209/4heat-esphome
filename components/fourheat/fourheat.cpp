@@ -16,7 +16,12 @@ void FourHeat::loop() {
   while(this->available()) {
     uint8_t c;
     this->read_byte(&c);
-    this->handle_char_(c);
+    if (this->legacy_phase_ == LegacyPhase::WAIT_READ_SMS || this->legacy_phase_ == LegacyPhase::SEND_SMS ||
+        this->legacy_phase_ == LegacyPhase::DRAIN) {
+      this->handle_legacy_modem_byte_(c);
+    } else {
+      this->handle_char_(c);
+    }
   }
 
   if (!this->rx_message_.empty() && millis() - this->last_rx_char_timestamp_ > this->rx_timeout_) {
@@ -24,7 +29,9 @@ void FourHeat::loop() {
     this->rx_message_.clear();
   }
 
-  process_next_tx_message_();
+  if (!this->process_legacy_power_(millis())) {
+    this->process_next_tx_message_();
+  }
 }
 
 void FourHeat::update() {
@@ -117,7 +124,24 @@ void FourHeat::handle_char_(uint8_t c) {
     return;
   }
 
+  if (this->legacy_power_enabled_ && this->rx_message_.empty() && (c == '\r' || c == '\n')) {
+    return;
+  }
+
   if (c == 0x0D) {
+    if (this->legacy_phase_ == LegacyPhase::VERIFY_REPLY) {
+      this->handle_legacy_state_(now);
+      this->rx_message_.clear();
+      return;
+    }
+
+    if (this->legacy_power_enabled_ && this->rx_message_.size() >= 2 &&
+        this->rx_message_[0] == 'A' && this->rx_message_[1] == 'T') {
+      ESP_LOGD(TAG, "Ignoring unsolicited modem request");
+      this->rx_message_.clear();
+      return;
+    }
+
     this->handle_message_();
 
     this->rx_message_.clear();
@@ -131,6 +155,11 @@ void FourHeat::handle_char_(uint8_t c) {
     return;
   }
 
+  if (this->legacy_power_enabled_ && this->rx_message_.size() >= 64) {
+    // Keep the prefix for classification at CR while bounding the receive buffer.
+    this->last_rx_char_timestamp_ = now;
+    return;
+  }
   this->rx_message_.push_back(c);
   this->last_rx_char_timestamp_ = now;
 }
@@ -149,7 +178,8 @@ void FourHeat::handle_message_() {
     it += 5;
   }
 
-  auto id = std::string(data.begin(), it);
+  const auto id_end = this->legacy_power_enabled_ ? data.begin() + 6 : it;
+  auto id = std::string(data.begin(), id_end);
   auto value = std::vector<uint8_t>(it, data.end());
 
   ESP_LOGV(TAG, "Received data for %s: %s", id.c_str(), format_hex_pretty(value).c_str());
@@ -192,6 +222,10 @@ void FourHeat::process_next_tx_message_() {
         this->tx_message_.clear();
         ESP_LOGW(TAG, "Clearing command TX queue, because the module can reappear in an unknown state");
         this->tx_queue_ = {};
+        if (this->legacy_phase_ == LegacyPhase::QUEUED) {
+          ESP_LOGW(TAG, "Legacy power request cancelled because the controller went offline");
+          this->legacy_phase_ = LegacyPhase::IDLE;
+        }
 
         this->set_module_offline_(true);
       }
@@ -199,6 +233,10 @@ void FourHeat::process_next_tx_message_() {
   }
 
   if (this->module_offline_ && now - this->last_tx_message_timestamp_ < this->retry_throttle_) {
+    return;
+  }
+
+  if (this->tx_message_.empty() && this->start_legacy_exchange_if_due_(now)) {
     return;
   }
 

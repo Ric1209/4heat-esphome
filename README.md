@@ -107,6 +107,59 @@ My controller uses RJ 11 6P4C connector and has this pinout:
 
 Don't use the VCC for powering your ESP though, there is not much current and your 4Heat controller will start acting strange.
 
+### Experimental legacy GSM power control
+
+Set `legacy_power_control: true` on the 4Heat power switch to use the GSM Basic
+SMS path over the existing UART. The option defaults to `false`, which uses the
+configured datapoint writes as before.
+
+```yaml
+switch:
+  - platform: fourheat
+    name: Stove Power
+    restore_mode: DISABLED
+    datapoint: J30001
+    legacy_power_control: true
+```
+
+This mode uses `I30001` to read `J30001` and applies the state mapping shown in
+[example.yaml](example.yaml). Check that your firmware uses the same mapping.
+The legacy switch publishes ON for Run or Modulation and OFF for Off. Startup,
+shutdown, standby and alarm leave the last confirmed switch value in place.
+Existing sensors continue to report their configured values. The component
+logs in-progress states, Safety or Block, and verification timeouts.
+
+The controller must support GSM Basic on this RS232 port. The EasyTech AIR and
+SY250 modem manuals specify `A50=1`. The linked SY400 Modbus Essenziale manual
+specifies `P90=1` for its firmware, while the SY400 STD01 Combi manual uses P90
+for an auger configuration. Check the appliance-specific manual before changing
+any parameter. The component never writes either setting. The captures show
+GSM power commands alongside ordinary 4Heat reads, but do not establish how
+enabling the modem affects polling on a particular SY400 firmware.
+
+The component sends the captured SMS notification and waits up to 2.5 seconds
+for the matching `AT+CMGR` request before returning a synthetic SMS. It consumes
+trailing modem traffic until the UART is quiet, bounded at 2.5 seconds, then
+resumes 4Heat reads. The published capture stops short of a complete GSM
+session. Other AT requests are ignored because their expected replies are
+undocumented in the cited traces. A controller that depends on those replies
+may leave the outcome unconfirmed. The verification phase checks fresh
+`J30001` replies for up to five minutes while allowing normal polling between
+checks. Observing the target state confirms the reported state at that time.
+It cannot establish whether a request changed a state that was already at the
+target. Start and Stop are sent once per accepted user request.
+
+Sources: [Home Assistant RS232 capture](https://community.home-assistant.io/t/tiemme-4heat-stove-wifi-controller/374040/194),
+[RS232 capture notes](https://www.scribd.com/document/971022368/Comunicacion-4heat-RS232-Ingles),
+[EasyTech AIR §7.1](https://www.energ.gr/media/kunena/attachments/7078/Manual__Full_AIR_UK_2018-11-07.pdf),
+[SY250 §6.13](https://manualzz.com/doc/58529979/tiemme-sy250-manual),
+[SY400 Modbus Essenziale §11.23](https://www.mescolicaldaie.it/wp-content/uploads/2023/12/Man_Ass_SY400_Modbus-Essenziale-V0.3-V0.4-0519_it.pdf),
+[SY400 STD01 Combi](https://www.semsystem.it/_files/ugd/c0d129_d4dbaa1b1fb04e51a988e19aa8b00d8c.pdf).
+
+With ESPHome 2026.11.0 and a Linux host C++ toolchain on PATH, run
+`python3 tests/test_legacy_power.py`. The suite compiles host applications and
+exchanges frames on pseudo-terminals.
+
 ### Config example
 
 You can find my full config in the [example.yaml](example.yaml).
