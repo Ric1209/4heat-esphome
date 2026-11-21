@@ -14,7 +14,7 @@ class FourHeatSwitch : public switch_::Switch, public Component {
   void setup() override;
   void dump_config() override;
 
-  void enable_legacy_power_control() { this->legacy_power_control_ = true; }
+  void enable_gsm_power_control() { this->gsm_power_control_ = true; }
   void set_fourheat_parent(FourHeat *parent);
   void set_datapoint_id(std::string datapoint_id);
   void set_query_datapoint_id(std::string datapoint_id);
@@ -28,7 +28,7 @@ class FourHeatSwitch : public switch_::Switch, public Component {
 
  protected:
   FourHeat *parent_;
-  bool legacy_power_control_{false};
+  bool gsm_power_control_{false};
   std::string datapoint_id_;
   esphome::optional<std::string> query_datapoint_id_;
 

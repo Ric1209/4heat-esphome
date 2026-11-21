@@ -1,3 +1,5 @@
+import logging
+
 from esphome.components import switch
 import esphome.config_validation as cv
 import esphome.codegen as cg
@@ -21,15 +23,32 @@ CONF_ON_DATAPOINT = "on_datapoint"
 CONF_OFF_DATAPOINT = "off_datapoint"
 CONF_ON_DATA = "on_data"
 CONF_OFF_DATA = "off_data"
+CONF_POWER_CONTROL = "power_control"
 CONF_LEGACY_POWER_CONTROL = "legacy_power_control"
+POWER_CONTROL_STANDARD = "standard"
+POWER_CONTROL_GSM = "gsm"
+
+_LOGGER = logging.getLogger(__name__)
 
 
-def validate_legacy_power(config):
-    if config[CONF_LEGACY_POWER_CONTROL] and (
-        config[CONF_DATAPOINT] != "J30001"
-        or config.get(CONF_QUERY_DATAPOINT, "I30001") != "I30001"
-    ):
-        raise cv.Invalid("legacy_power_control requires datapoint J30001 and query I30001")
+def validate_power_control(config):
+    mode = config.get(CONF_POWER_CONTROL)
+    if CONF_LEGACY_POWER_CONTROL in config:
+        alias_mode = POWER_CONTROL_GSM if config[CONF_LEGACY_POWER_CONTROL] else POWER_CONTROL_STANDARD
+        if mode is not None and mode != alias_mode:
+            raise cv.Invalid("legacy_power_control conflicts with power_control", [CONF_LEGACY_POWER_CONTROL])
+        _LOGGER.warning("legacy_power_control is deprecated. Use power_control: %s", alias_mode)
+        mode = alias_mode
+    config[CONF_POWER_CONTROL] = mode or POWER_CONTROL_STANDARD
+
+    if config[CONF_POWER_CONTROL] == POWER_CONTROL_GSM:
+        if config.get(CONF_DATAPOINT, "J30001") != "J30001":
+            raise cv.Invalid("GSM power control uses datapoint J30001", [CONF_DATAPOINT])
+        if config.get(CONF_QUERY_DATAPOINT, "I30001") != "I30001":
+            raise cv.Invalid("GSM power control uses query I30001", [CONF_QUERY_DATAPOINT])
+        config.setdefault(CONF_DATAPOINT, "J30001")
+    elif CONF_DATAPOINT not in config:
+        raise cv.Invalid("datapoint is required for standard power control", [CONF_DATAPOINT])
     return config
 
 
@@ -39,7 +58,7 @@ CONFIG_SCHEMA = cv.All(
         .extend(
             {
                 cv.GenerateID(CONF_FOURHEAT_ID): cv.use_id(FourHeat),
-                cv.Required(CONF_DATAPOINT): fhcv.datapoint,
+                cv.Optional(CONF_DATAPOINT): fhcv.datapoint,
                 cv.Optional(CONF_QUERY_DATAPOINT): fhcv.datapoint,
 
                 cv.Optional(CONF_PARSER): cv.returning_lambda,
@@ -48,12 +67,13 @@ CONFIG_SCHEMA = cv.All(
                 cv.Optional(CONF_OFF_DATAPOINT): fhcv.datapoint,
                 cv.Optional(CONF_ON_DATA): fhcv.data,
                 cv.Optional(CONF_OFF_DATA): fhcv.data,
-                cv.Optional(CONF_LEGACY_POWER_CONTROL, default=False): cv.boolean,
+                cv.Optional(CONF_LEGACY_POWER_CONTROL): cv.boolean,
+                cv.Optional(CONF_POWER_CONTROL): cv.one_of(POWER_CONTROL_STANDARD, POWER_CONTROL_GSM, lower=True),
             }
         )
         .extend(cv.COMPONENT_SCHEMA)
     ),
-    validate_legacy_power,
+    validate_power_control,
 )
 
 
@@ -63,10 +83,11 @@ async def to_code(config):
 
     parent = await cg.get_variable(config[CONF_FOURHEAT_ID])
     cg.add(var.set_fourheat_parent(parent))
-    if config[CONF_LEGACY_POWER_CONTROL]:
-        cg.add(var.enable_legacy_power_control())
-
     cg.add(var.set_datapoint_id(config[CONF_DATAPOINT]))
+
+    if config[CONF_POWER_CONTROL] == POWER_CONTROL_GSM:
+        cg.add(var.enable_gsm_power_control())
+        return
 
     if CONF_QUERY_DATAPOINT in config:
         cg.add(var.set_query_datapoint_id(config[CONF_QUERY_DATAPOINT]))

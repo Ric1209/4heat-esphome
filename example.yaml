@@ -17,6 +17,7 @@ switch:
     name: State
     platform: fourheat
     restore_mode: DISABLED
+    # Uses standard 4Heat datapoint writes. See example-gsm-it.yaml for GSM.
     datapoint: J30001
     on_datapoint: J30253
     off_datapoint: J30254

@@ -8,7 +8,7 @@ Simply add this to your config:
 
 ```yaml
 external_components:
-  source: github://leoshusar/4heat-esphome
+  source: github://Ric1209/4heat-esphome@feature/legacy-gsm-power
 ```
 
 And configure your components. You can also skip directly to the [configuration example](example.yaml).
@@ -21,6 +21,7 @@ And configure your components. You can also skip directly to the [configuration 
 - [Datapoints](#datapoints)
 - [4Heat hardware](#4heat-hardware)
 - [ESPHome hardware](#esphome-hardware)
+- [POWER control](#power-control)
 - [Config example](#config-example)
 - [Official 4Heat WiFi module](#official-4heat-wifi-module)
 
@@ -107,58 +108,76 @@ My controller uses RJ 11 6P4C connector and has this pinout:
 
 Don't use the VCC for powering your ESP though, there is not much current and your 4Heat controller will start acting strange.
 
-### Experimental legacy GSM power control
+### POWER control
 
-Set `legacy_power_control: true` on the 4Heat power switch to use the GSM Basic
-SMS path over the existing UART. The option defaults to `false`, which uses the
-configured datapoint writes as before.
+Set the mode on the 4Heat switch. `power_control: standard` is the default and uses 4Heat datapoint writes.
+Set `power_control: gsm` to emulate a GSM Basic modem on the existing UART. Normal polling and other
+configured datapoints continue to use 4Heat. The selected mode is fixed by YAML.
 
 ```yaml
 switch:
   - platform: fourheat
     name: Stove Power
-    restore_mode: DISABLED
-    datapoint: J30001
-    legacy_power_control: true
+    power_control: gsm
 ```
 
-This mode uses `I30001` to read `J30001` and applies the state mapping shown in
-[example.yaml](example.yaml). Check that your firmware uses the same mapping.
-The legacy switch publishes ON for Run or Modulation and OFF for Off. Startup,
-shutdown, standby and alarm leave the last confirmed switch value in place.
-Existing sensors continue to report their configured values. The component
-logs in-progress states, Safety or Block, and verification timeouts.
+GSM mode reads `I30001` / `J30001` internally. You can remove `datapoint` and `query_datapoint` from the
+switch. The old `on_datapoint`, `off_datapoint`, `on_data`, `off_data` and switch `parser` are accepted
+for migration and unused in GSM mode. Replace `legacy_power_control: true` with `power_control: gsm`.
+`legacy_power_control: false` maps to `standard`. The deprecated key logs a warning. If you supply
+both keys, they must select the same mode.
 
-The controller must support GSM Basic on this RS232 port. The EasyTech AIR and
-SY250 modem manuals specify `A50=1`. The linked SY400 Modbus Essenziale manual
-specifies `P90=1` for its firmware, while the SY400 STD01 Combi manual uses P90
-for an auger configuration. Check the appliance-specific manual before changing
-any parameter. The component never writes either setting. The captures show
-GSM power commands alongside ordinary 4Heat reads, but do not establish how
-enabling the modem affects polling on a particular SY400 firmware.
+Start, Stop and normal 4Heat reads on the same RS232 port were verified by the owner of an Ungaro boiler
+with a Tiemme SY400, using the initial GSM implementation and `A50 = 1` as specified by the appliance
+manual. This result applies to the tested unit and firmware. Other controller revisions may assign a
+different parameter or use different state codes. See the [state mapping and evidence](docs/operating-states.md).
 
-The component sends the captured SMS notification and waits up to 2.5 seconds
-for the matching `AT+CMGR` request before returning a synthetic SMS. It consumes
-trailing modem traffic until the UART is quiet, bounded at 2.5 seconds, then
-resumes 4Heat reads. The published capture stops short of a complete GSM
-session. Other AT requests are ignored because their expected replies are
-undocumented in the cited traces. A controller that depends on those replies
-may leave the outcome unconfirmed. The verification phase checks fresh
-`J30001` replies for up to five minutes while allowing normal polling between
-checks. Observing the target state confirms the reported state at that time.
-It cannot establish whether a request changed a state that was already at the
-target. Start and Stop are sent once per accepted user request.
+#### Switch behavior in GSM mode
 
-Sources: [Home Assistant RS232 capture](https://community.home-assistant.io/t/tiemme-4heat-stove-wifi-controller/374040/194),
-[RS232 capture notes](https://www.scribd.com/document/971022368/Comunicacion-4heat-RS232-Ingles),
-[EasyTech AIR §7.1](https://www.energ.gr/media/kunena/attachments/7078/Manual__Full_AIR_UK_2018-11-07.pdf),
-[SY250 §6.13](https://manualzz.com/doc/58529979/tiemme-sy250-manual),
-[SY400 Modbus Essenziale §11.23](https://www.mescolicaldaie.it/wp-content/uploads/2023/12/Man_Ass_SY400_Modbus-Essenziale-V0.3-V0.4-0519_it.pdf),
-[SY400 STD01 Combi](https://www.semsystem.it/_files/ugd/c0d129_d4dbaa1b1fb04e51a988e19aa8b00d8c.pdf).
+The switch represents the requested direction of operation. It changes as soon as a request is accepted.
+A fresh state read before the SMS notification checks that the request is still compatible with the
+controller state. On startup, or following a change at the physical panel, the switch follows reported
+controller states.
 
-With ESPHome 2026.11.0 and a Linux host C++ toolchain on PATH, run
-`python3 tests/test_legacy_power.py`. The suite compiles host applications and
-exchanges frames on pseudo-terminals.
+| Reported state | Switch | Remote POWER accepted |
+| --- | --- | --- |
+| Off | OFF | Start |
+| Check Up, Ignition, Stabilization, Ignition Recovery | ON | Neither |
+| Normal, Modulation | ON | Stop |
+| Shutdown | OFF | Neither |
+| Standby | ON (enabled, waiting) | Neither |
+| Safety, Lockout | OFF | Neither |
+| Unrecognized code or lost communication | Last value, if known | Neither |
+
+Stop during ignition or Standby is disabled until the behavior of the tested revision is verified.
+After an ESP restart the switch takes its value from a fresh controller reading. When a command is
+pending, readings in the old direction leave the switch at the requested value. A matching direction
+confirms the cycle has changed direction. Safety and Lockout resolve a pending request as a fault.
+
+The controller has 2.5 seconds from the end of `+CMTI` to request SMS 1 with `AT+CMGR=1`. A read timeout
+restores the observed state. After the SMS response, `AT+CMGD=1` receives `OK` during the modem exchange.
+The 3GPP example uses this success response. [3GPP SMS command reference, §3.5.7](https://www.etsi.org/deliver/etsi_ts/127000_127099/127005/03.01.00_60/ts_127005v030100p.pdf)
+A quiet UART lets normal polling resume if the controller skips deletion. Other AT requests have no
+associated response. A late delete outside the exchange is ignored so it cannot interrupt a 4Heat read.
+
+If the SMS was sent, the component checks for the requested direction for up to five minutes while
+ordinary polling continues. An unresolved request keeps the switch at its requested value and blocks
+further POWER commands. Regular polling can still resolve it when the requested direction or a fault
+appears. The firmware sends each POWER command once. The optional `power_state_uncertain` binary sensor
+is active while a request awaits confirmation, during communication loss, and for states with unknown
+power direction. The `module_offline` binary sensor reports a 4Heat communication outage.
+
+#### Italian state labels
+
+[example-gsm-it.yaml](example-gsm-it.yaml) is a complete ESP32 example with Italian labels configured
+on the `J30001` text sensor. Labels affect the text sensor only. Check Home Assistant dashboard state
+conditions, colors and icons, automations, scripts and templates that compare that entity's state.
+The old English values and their Italian equivalents are listed in the [mapping](docs/operating-states.md).
+Keep the entity IDs when migrating an existing configuration.
+
+Run `python3 tests/test_legacy_power.py` with ESPHome 2026.11.0 and a Linux C++ toolchain on PATH.
+The suite includes simulated-clock tests and ESPHome host applications that exchange frames over
+pseudo-terminals.
 
 ### Config example
 
@@ -238,6 +257,7 @@ binary_sensor:
 - **type** (*Optional*, enum): `binary_sensor` type. Defaults to `datapoint`.
   - `datapoint`: datapoint sensor.
   - `module_offline`: indicates if the 4Heat controller is offline.
+  - `power_state_uncertain`: GSM POWER is awaiting confirmation or the current direction is unknown.
 
 ### Datapoint
 - **datapoint** (**Required**, [datapoint](#custom-variable-types)): The datapoint id of the binary sensor.
@@ -439,7 +459,8 @@ switch:
 
 - **id** (*Optional*, [ID](https://esphome.io/guides/configuration-types#config-id)): Manually specify the ID used for code generation.
 - **name** (**Required**, string): The name of the switch.
-- **datapoint** (**Required**, [datapoint](#custom-variable-types)): The datapoint id of the switch.
+- **power_control** (*Optional*, enum): `standard` (default) or `gsm`. See [POWER control](#power-control).
+- **datapoint** (**Required in standard mode**, [datapoint](#custom-variable-types)): The datapoint id of the switch.
 - **query_datapoint** (*Optional*, [datapoint](#custom-variable-types)): The query datapoint id of the switch. If not specified, uses `datapoint` with prefix letter decremented by one.
 - **on_datapoint** (*Optional*, [datapoint](#custom-variable-types)): The datapoint id for sending ON command.
 - **off_datapoint** (*Optional*, [datapoint](#custom-variable-types)): The datapoint id for sending OFF command.

@@ -1,0 +1,66 @@
+esphome:
+  name: 4heat-gsm
+  friendly_name: Caldaia
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+  baud_rate: 0
+
+api:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+external_components:
+  source: github://Ric1209/4heat-esphome@feature/legacy-gsm-power
+
+# Adatta i pin alla tua interfaccia RS232.
+uart:
+  tx_pin: GPIO5
+  rx_pin: GPIO4
+  baud_rate: 9600
+
+fourheat:
+
+switch:
+  - platform: fourheat
+    id: stato_caldaia_switch
+    name: Accensione caldaia
+    power_control: gsm
+
+text_sensor:
+  - platform: fourheat
+    name: Stato caldaia
+    datapoint: J30001
+    options:
+      0: "Spento"
+      1: "Check Up"
+      2: "Accensione"
+      3: "Stabilizzazione"
+      4: "Accensione"
+      5: "Normale"
+      6: "Modulazione"
+      7: "Spegnimento"
+      8: "Sicurezza"
+      9: "Blocco"
+      10: "Recupero accensione"
+      11: "Standby"
+      30: "Accensione"
+      31: "Accensione"
+      32: "Accensione"
+      33: "Accensione"
+      34: "Accensione"
+
+binary_sensor:
+  - platform: fourheat
+    name: Caldaia non raggiungibile
+    type: module_offline
+
+  - platform: fourheat
+    name: Stato accensione incerto
+    type: power_state_uncertain

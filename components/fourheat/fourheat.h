@@ -13,14 +13,11 @@
 #endif
 
 #include "esphome/components/uart/uart.h"
+#include "gsm_modem.h"
+#include "gsm_power.h"
 
 namespace esphome {
 namespace fourheat {
-
-enum class LegacyPowerStatus { UNKNOWN, OFF, STARTING, RUNNING, STOPPING, ALARM, STANDBY };
-
-LegacyPowerStatus classify_legacy_power_state(std::vector<uint8_t>::const_iterator begin,
-                                              std::vector<uint8_t>::const_iterator end);
 
 struct FourHeatDataListener {
   std::string id;
@@ -31,12 +28,14 @@ class FourHeat : public PollingComponent, public uart::UARTDevice {
  public:
   float get_setup_priority() const override { return setup_priority::LATE; }
 
+  void setup() override;
   void loop() override;
   void update() override;
   void dump_config() override;
 
 #ifdef USE_BINARY_SENSOR
   void set_module_offline_sensor(binary_sensor::BinarySensor *module_offline_sensor);
+  void set_power_state_uncertain_sensor(binary_sensor::BinarySensor *sensor) { this->power_state_uncertain_sensor_ = sensor; }
 #endif
 
   void set_tx_throttle(uint16_t tx_throttle);
@@ -48,8 +47,8 @@ class FourHeat : public PollingComponent, public uart::UARTDevice {
   void register_query(const std::string &id);
   void register_listener(const std::string &id, const std::function<void(const std::vector<uint8_t>)> &func);
 
-  void enable_legacy_power_control() { this->legacy_power_enabled_ = true; }
-  void request_legacy_power(bool on);
+  void register_gsm_power_switch(std::function<void(bool)> publish_state);
+  void request_gsm_power(bool on);
 
   void send_raw_value(const std::vector<uint8_t> &value);
   void send_bytes_value(const std::string &id, const std::vector<uint8_t> &value);
@@ -60,6 +59,7 @@ class FourHeat : public PollingComponent, public uart::UARTDevice {
  protected:
 #ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *module_offline_sensor_{nullptr};
+  binary_sensor::BinarySensor *power_state_uncertain_sensor_{nullptr};
 #endif
 
   uint16_t tx_throttle_{10};
@@ -70,6 +70,7 @@ class FourHeat : public PollingComponent, public uart::UARTDevice {
 
   uint32_t last_rx_char_timestamp_{0};
   uint32_t last_tx_message_timestamp_{0};
+  uint32_t tx_airtime_ms_{0};
   std::vector<uint8_t> rx_message_;
 
   bool awaiting_response_{false};
@@ -82,25 +83,22 @@ class FourHeat : public PollingComponent, public uart::UARTDevice {
   std::queue<std::vector<uint8_t>> tx_queue_;
   std::vector<FourHeatDataListener> listeners_;
 
-  enum class LegacyPhase { IDLE, QUEUED, WAIT_READ_SMS, SEND_SMS, DRAIN, VERIFY_PENDING, VERIFY_REPLY };
-  LegacyPhase legacy_phase_{LegacyPhase::IDLE};
-  bool legacy_power_enabled_{false};
-  bool legacy_target_on_{false};
-  bool legacy_sms_delivered_{false};
-  bool legacy_stop_pending_{false};
-  uint32_t legacy_phase_started_{0};
-  uint32_t legacy_verification_started_{0};
-  uint32_t legacy_last_read_{0};
-  std::string legacy_line_;
-  bool legacy_line_invalid_{false};
-  bool legacy_line_padded_{false};
-  LegacyPowerStatus legacy_last_status_{LegacyPowerStatus::UNKNOWN};
+  bool gsm_enabled_{false};
+  GsmModem modem_;
+  GsmPower power_;
+  std::vector<std::function<void(bool)>> power_switches_;
+  std::vector<uint8_t> power_status_query_;
+  uint32_t last_power_query_{0};
+  bool refresh_power_state_{false};
+  bool expedited_power_query_{false};
 
-  bool process_legacy_power_(uint32_t now);
-  bool start_legacy_exchange_if_due_(uint32_t now);
-  void handle_legacy_modem_byte_(uint8_t c);
-  void handle_legacy_state_(uint32_t now);
-  void write_legacy_bytes_(const std::string &data);
+  bool process_modem_(uint32_t now);
+  bool start_gsm_exchange_();
+  void observe_power_state_(OperatingState state);
+  void publish_power_state_();
+
+  void transmit_(const uint8_t *data, size_t length);
+  bool tx_ready_(uint32_t now, uint32_t delay_ms) const;
 
   void handle_char_(uint8_t c);
   void handle_message_();
